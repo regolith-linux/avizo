@@ -1,0 +1,10 @@
+#!/bin/bash
+
+light_loc=$(whereis light)
+brightnessctl_loc=$(whereis brightnessctl)
+
+if [ ! -z ${light_loc+x} ]; then
+  chmod +s /usr/bin/light
+fi
+
+
