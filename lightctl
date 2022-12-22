@@ -113,7 +113,7 @@ if ! is_integer "$light" && ! is_float "$light"; then
 fi
 
 if is_float "$light"; then
-    light=${light/.*}
+    light=${light%.*}
 fi
 
 if [ "$light" -le 33 ]; then

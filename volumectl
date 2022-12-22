@@ -18,18 +18,13 @@
 #   % | toggle-mute  Switch between mute and unmute.
 #
 # Options:
-#   -a               Use with mute, unmute or toggle-mute command to sync the
-#                      mute state of all sinks or sources with <device-id> or
-#                      the default device.
 #   -b               Allow volume to go above 100% (boost).
-#   -D <device-id>   Choose a different sink (output) or source (input) than
-#                      the default (see pamixer --list-sinks and --list-sources).
 #   -p               Choose the currently playing sink (or source) instead of
 #                      the default. In case of multiple playing sinks/sources,
 #                      it will choose the first one as reported by pactl/pamixer.
-#   -g <gamma>       Increase/decrease using gamma correction (e.g. 2.2).
 #   -m               Control the source (mic) instead of sink (output).
 #   -u               Unmute when changing the volume (+|-|=).
+#   -d               Select the driver to use (pactl or pamixer)
 #   -h               Show this message and exit.
 #
 # This script is part of the avizo package.
@@ -67,21 +62,21 @@ playing_dev_id() {
 
 
 all_flag=false
-dev=
+allow_boost=false
+driver='pactl'
 dev_type='sink'
 use_playing=false
+unmute=false
 opts=
 unmute_opt=
 optind=1
-while getopts ':abD:pg:muh' OPT; do
+while getopts ':bd:p:muh' OPT; do
 	case "$OPT" in
-		a) all_flag=true;;
-		b) opts="$opts --allow-boost";;
-		D) dev=$OPTARG;;
+		b) allow_boost=true;;
+		d) driver='$OPTARG';;
 		p) use_playing=true;;
-		g) opts="$opts --gamma=$OPTARG";;
 		m) dev_type='source';;
-		u) unmute_opt='--unmute';;
+		u) unmute=true;;
 		h) help; exit 0;;
 		\?) case "$OPTARG" in
 		    	[0-9]*) break;;
