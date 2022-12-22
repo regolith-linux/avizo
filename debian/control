@@ -1,4 +1,4 @@
-Source: avizo
+Source: regolith-avizo
 Section: unknown
 Priority: optional
 Maintainer: Soumya Ranjan Patnaik <soumyaranjan1812@gmail.com>
@@ -19,8 +19,11 @@ Homepage: https://github.com/misterdanb/avizo
 #Vcs-Browser: https://salsa.debian.org/debian/avizo
 #Vcs-Git: https://salsa.debian.org/debian/avizo.git
 
-Package: avizo
+Package: regolith-avizo
 Architecture: all
+Provides: avizo
+Conflicts: avizo
+Replaces: avizo
 Depends:
  ${shlibs:Depends}, 
  ${misc:Depends},

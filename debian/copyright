@@ -1,6 +1,6 @@
 Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
 Source: <url://example.com>
-Upstream-Name: avizo
+Upstream-Name: regolith-avizo
 Upstream-Contact: <preferred name and address to reach the upstream project>
 
 Files:
@@ -12,6 +12,13 @@ License: GPL-3.0+
 Files:
  debian/*
 Copyright:
+ 2022 Soumya Ranjan Patnaik <soumyaranjan1812@gmail.com>
+License: GPL-3.0+
+
+Files:
+lightctl, volumectl
+Copyright:
+ 2022 misterdanb
  2022 Soumya Ranjan Patnaik <soumyaranjan1812@gmail.com>
 License: GPL-3.0+
 
