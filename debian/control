@@ -27,7 +27,7 @@ Replaces: avizo
 Depends:
  ${shlibs:Depends}, 
  ${misc:Depends},
- pulseaudio,
+ pulseaudio-utils,
  light,
  playerctl
 Description: Avizo is a simple notification daemon, 
