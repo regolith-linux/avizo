@@ -1,3 +1,9 @@
+regolith-avizo (0.1.2) focal; urgency=medium
+
+  * Fixed depends
+
+ -- Somya Ranjan Patnaik <soumyaranjan1812@gmail.com>  Mon, 26 Dec 2022 23:52:38 +0530
+
 regolith-avizo (0.1.1) focal; urgency=medium
 
   * Added postinst and updated control
