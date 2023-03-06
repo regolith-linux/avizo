@@ -1,3 +1,14 @@
+regolith-avizo (0.1.3) jammy; urgency=medium
+
+  [ Soumya Ranjan Patnaik ]
+  * Package changes
+
+  [ Regolith Linux ]
+  * Use quilt format to build debian
+  * add gbp conf
+
+ -- Regolith Linux <regolith.linux@gmail.com>  Sun, 05 Mar 2023 19:04:02 -0800
+
 regolith-avizo (0.1.2) focal; urgency=medium
 
   * Fixed depends
