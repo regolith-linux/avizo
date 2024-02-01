@@ -1,0 +1,36 @@
+Source: regolith-avizo
+Section: unknown
+Priority: optional
+Maintainer: Soumya Ranjan Patnaik <soumyaranjan1812@gmail.com>
+Build-Depends:
+ debhelper-compat (= 13),
+ libglib2.0-dev,
+ libgtk-3-dev (>= 3.22),
+ libgtk-layer-shell0,
+ gir1.2-gtklayershell-0.1,
+ libgtk-layer-shell-dev,
+ libgirepository1.0-dev,
+ gobject-introspection,
+ meson,
+ valac-0.56-vapi,
+ valac-bin
+Standards-Version: 4.6.1
+Homepage: https://github.com/misterdanb/avizo
+#Vcs-Browser: https://salsa.debian.org/debian/avizo
+#Vcs-Git: https://salsa.debian.org/debian/avizo.git
+
+Package: regolith-avizo
+Architecture: all
+Provides: avizo
+Conflicts: avizo
+Replaces: avizo
+Depends:
+ ${shlibs:Depends}, 
+ ${misc:Depends},
+ pulseaudio-utils,
+ light,
+ playerctl
+Recommends: pulseaudio-utils
+Description: Avizo is a simple notification daemon, 
+  mainly intended to be used for multimedia keys for 
+  example with Sway. 
