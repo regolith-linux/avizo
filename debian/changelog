@@ -1,3 +1,10 @@
+regolith-avizo (0.1.5) focal; urgency=medium
+
+  [ Khosrow Moossavi ]
+  * feat: use build-only to test pull request
+
+ -- Regolith Linux <regolith.linux@gmail.com>  Mon, 13 Oct 2025 18:38:17 +0000
+
 regolith-avizo (0.1.4) focal; urgency=medium
 
   [ Khosrow Moossavi ]
