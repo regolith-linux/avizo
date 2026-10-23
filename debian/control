@@ -29,7 +29,8 @@ Depends:
  ${misc:Depends},
  pulseaudio-utils,
  light,
- playerctl
+ playerctl,
+ librsvg2-common
 Recommends: pulseaudio-utils
 Description: Avizo is a simple notification daemon, 
   mainly intended to be used for multimedia keys for 
