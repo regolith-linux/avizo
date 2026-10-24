@@ -70,13 +70,15 @@ get_property_val_cmd() {
   echo "get-$1-$2"
 }
 
+# Prints 1 if the default sink or source ($1) is muted, else 0. No grep here:
+# the script runs with pipefail where the shell has it, and a grep that finds
+# nothing would end the script.
 is_muted() {
-  dev_type_capital=$(echo "$1" | sed 's/.*/\u&/')
-  prop_name="Default $dev_type_capital: "
-  prop_name_len=$(( ${#prop_name} + 1 ))
-  dev_id=$(pactl info | grep "$prop_name" | cut -c $prop_name_len)
-  muted=$( pactl list | grep "$dev_id" -A 12 | grep Mute | grep "yes" | wc -l)
-  echo $muted
+  dev_type_upper=$(echo "$1" | tr '[:lower:]' '[:upper:]')
+  case "$(pactl "get-$1-mute" "@DEFAULT_${dev_type_upper}@")" in
+    *yes*) echo 1;;
+    *) echo 0;;
+  esac
 }
 
 allow_boost=false
@@ -178,7 +180,7 @@ case "$dev_type" in
 		fi
 	;;
 	source)
-		if [ "$muted" = 'true' ]; then
+		if [ "$muted" -gt "0" ]; then
 			image='mic_muted'
 		else
 			image='mic_unmuted'
