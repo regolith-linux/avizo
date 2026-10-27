@@ -18,7 +18,7 @@
 #   % | toggle-mute  Switch between mute and unmute.
 #   show             Show the current volume without changing it.
 #
-# Options:
+# Options (also accepted after the command):
 #   -b               Allow volume to go above 100% (boost).
 #   -m               Control the source (mic) instead of sink (output).
 #   -u               Unmute when changing the volume (+|-|=).
@@ -71,6 +71,11 @@ get_property_val_cmd() {
   echo "get-$1-$2"
 }
 
+# Prints the volume of the sink or source ($1) named $2 in percents.
+get_volume() {
+  pactl $(get_property_val_cmd "$1" "volume") "$2" | head -n 1 | awk '{print substr($5, 1, length($5)-1)}'
+}
+
 # Prints 1 if the default sink or source ($1) is muted, else 0. No grep here:
 # the script runs with pipefail where the shell has it, and a grep that finds
 # nothing would end the script.
@@ -86,7 +91,7 @@ allow_boost=false
 dev_type='sink'
 unmute=false
 optind=1
-while getopts ':b:p:muh' OPT; do
+while getopts ':bp:muh' OPT; do
 	case "$OPT" in
 		b) allow_boost=true;;
 		m) dev_type='source';;
@@ -101,6 +106,17 @@ while getopts ':b:p:muh' OPT; do
 	optind=$OPTIND  # hack to make -<value>% work correctly
 done
 shift $((optind -1))
+
+# Options may also follow the command (e.g. 'volumectl + 5 -b').
+for arg do
+	shift
+	case "$arg" in
+		-b) allow_boost=true;;
+		-m) dev_type='source';;
+		-u) unmute=true;;
+		*) set -- "$@" "$arg";;
+	esac
+done
 
 if [ $# -lt 1 ] || [ $# -gt 2 ]; then
 	die "invalid number of arguments (see '$0 -h')"
@@ -151,6 +167,21 @@ esac
 dev_type_upper=$(echo $dev_type |tr '[:lower:]' '[:upper:]')
 dev_opt="@DEFAULT_$dev_type_upper@"
 
+# Without -b, raising or setting stops at 100%.
+if ! $allow_boost; then
+	case "$cmd" in
+		+ | up | raise)
+			current=$(get_volume "$dev_type" "$dev_opt")
+			if is_integer "$current" && [ $((current + value)) -gt 100 ]; then
+				cmd_opt='100%'
+			fi;;
+		= | set)
+			if [ "$value" -gt 100 ]; then
+				cmd_opt='100%'
+			fi;;
+	esac
+fi
+
 if $is_volume_cmd && $unmute; then
  pactl "set-$dev_type-mute" $dev_opt false
 fi
@@ -160,12 +191,7 @@ if [ -n "$cmd_type" ]; then
 fi
 
 muted=$(is_muted $dev_type)
-volume=$(pactl $(get_property_val_cmd $dev_type "volume") $dev_opt | head -n 1| awk '{print substr($5, 1, length($5)-1)}')
-
-if $allow_boost && $is_volume_cmd && [ "$volume" -gt "100" ]; then
-  pactl $cmd_type $dev_opt 100%
-fi
-
+volume=$(get_volume $dev_type $dev_opt)
 
 if ! is_integer "$volume"; then
 	die "pactl returned invalid volume level: '$volume'"
