@@ -39,7 +39,7 @@ Adjust (display) brightness and show Avizo notification.
 
 * POSIX-sh compatible shell (e.g. Busybox ash, dash, ZSH, bash, …)
 * common \*nix userland (BSD, Busybox or GNU)
-* [brightnessctl](https://github.com/Hummer12007/brightnessctl) or [light](https://github.com/haikarainen/light)
+* [brightnessctl](https://github.com/Hummer12007/brightnessctl) or [light](https://gitlab.com/dpeukert/light)
 
 
 ## Sway config
@@ -55,6 +55,10 @@ bindsym XF86MonBrightnessDown exec lightctl down
 
 exec "avizo-service"
 ```
+
+The `exec "avizo-service"` line is optional when Avizo is installed with
+meson: it installs a D-Bus activation file, so the session bus starts
+`avizo-service` on the first notification (and again if it was stopped).
 
 ## Install
 

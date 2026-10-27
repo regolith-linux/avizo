@@ -35,7 +35,8 @@ public class AvizoWindow : Gtk.Window
 		}
 	}
 
-	public double image_opacity {
+	public double image_opacity
+	{
 		get
 		{
 			return image.opacity;
@@ -47,6 +48,8 @@ public class AvizoWindow : Gtk.Window
 	}
 
 	public double progress { get; set; }
+
+	public int monitor { get; set; }
 
 	private int _width = 248;
 	public int width
@@ -81,6 +84,7 @@ public class AvizoWindow : Gtk.Window
 	}
 
 	public int padding { get; set; }
+	public double x_offset { get; set; }
 	public double y_offset { get; set; }
 	public int border_radius { get; set; }
 	public new int border_width { get; set; }
@@ -253,8 +257,8 @@ public class AvizoWindow : Gtk.Window
 		GtkLayerShell.set_monitor(this, no_monitor);
 		show_animated();
 
-		// The output is only known once the surface is on it, so the offset
-		// from its top can only be applied then.
+		// The output is only known once the surface is on it, so the offsets
+		// can only be applied then.
 		if (place_timeout_id == 0)
 		{
 			place_timeout_id = Timeout.add(20, () =>
@@ -277,10 +281,15 @@ public class AvizoWindow : Gtk.Window
 
 	private void place_on(Gdk.Monitor monitor)
 	{
-		var margin = (int) Math.lround((monitor.workarea.height - _height) * y_offset);
-		if (GtkLayerShell.get_margin(this, GtkLayerShell.Edge.TOP) != margin)
+		var margin_top = (int) Math.lround((monitor.workarea.height - _height) * y_offset);
+		var margin_left = (int) Math.lround((monitor.workarea.width - _width) * x_offset);
+		if (GtkLayerShell.get_margin(this, GtkLayerShell.Edge.TOP) != margin_top)
 		{
-			GtkLayerShell.set_margin(this, GtkLayerShell.Edge.TOP, margin);
+			GtkLayerShell.set_margin(this, GtkLayerShell.Edge.TOP, margin_top);
+		}
+		if (GtkLayerShell.get_margin(this, GtkLayerShell.Edge.LEFT) != margin_left)
+		{
+			GtkLayerShell.set_margin(this, GtkLayerShell.Edge.LEFT, margin_left);
 		}
 	}
 
@@ -307,10 +316,11 @@ public class AvizoWindow : Gtk.Window
 		{
 			animation_us_elapsed = 0;
 		}
-		else {
-
+		else
+		{
 			animation_us_elapsed = (frame_clock.get_frame_time() - prev_frame_time);
 		}
+
 		prev_frame_time = frame_clock.get_frame_time();
 		var animation_sec_elapsed = (double)animation_us_elapsed / 1000000;
 		//var animation_sec_elapsed = (double)us_elapsed(frame_clock) / 1000000;
@@ -323,8 +333,13 @@ public class AvizoWindow : Gtk.Window
 				frame_clock.end_updating();
 				return false;
 			}
-			opacity += animation_sec_elapsed/fade_in;
-			if (opacity > 1) opacity = 1;
+
+			opacity += animation_sec_elapsed / fade_in;
+			if (opacity > 1)
+			{
+				opacity = 1;
+			}
+
 			widget.set_opacity(opacity);
 		}
 		else
@@ -336,8 +351,13 @@ public class AvizoWindow : Gtk.Window
 				frame_clock.end_updating();
 				return false;
 			}
-			opacity -= animation_sec_elapsed/fade_out;
-			if (opacity < 0) opacity = 0;
+
+			opacity -= animation_sec_elapsed / fade_out;
+			if (opacity < 0)
+			{
+				opacity = 0;
+			}
+
 			widget.set_opacity(opacity);
 		}
 
@@ -383,18 +403,19 @@ public class AvizoWindow : Gtk.Window
 			for (int i = 0; i < (int) (block_count * progress); i++)
 			{
 				draw_rect(ctx, blocks_x + (block_width + block_spacing) * i,
-							blocks_y,
-							block_width,
-							block_height);
+				               blocks_y,
+				               block_width,
+				               block_height);
 			}
 		}
-		else {
+		else
+		{
 			var width = block_width * block_count * progress;
 			var height = block_height;
 			draw_rect(ctx, blocks_x,
-						blocks_y,
-						width,
-						height);
+			               blocks_y,
+			               width,
+			               height);
 		}
 
 		ctx.set_operator(Cairo.Operator.OVER);
@@ -441,9 +462,9 @@ public class AvizoWindow : Gtk.Window
 public class AvizoService : GLib.Object
 {
 	private static string[] props = {
-		"image_opacity", "progress", "width", "height", "padding",
+		"image_opacity", "progress", "width", "height", "padding", "monitor",
 		"border_radius", "border_width", "block_height", "block_spacing", "block_count", "fade_in", "fade_out", "background", "border_color",
-		"bar_fg_color", "bar_bg_color", "y_offset",
+		"bar_fg_color", "bar_bg_color", "x_offset", "y_offset",
 	};
 
 	// Each notification shows the image that was set last: image_path or
@@ -493,6 +514,7 @@ public class AvizoService : GLib.Object
 	public int height { get; set; default = 232; }
 	public int padding { get; set; default = 24; }
 	public double y_offset { get; set; default = 0.75; }
+	public double x_offset { get; set; default = 0.50; }
 	public int border_radius { get; set; default = 16; }
 	public int border_width { get; set; default = 1; }
 	public int block_height { get; set; default = 10; }
@@ -504,6 +526,7 @@ public class AvizoService : GLib.Object
 	public Gdk.RGBA border_color { get; set; default = rgba(90, 90, 90, 0.8); }
 	public Gdk.RGBA bar_fg_color { get; set; default = rgba(0, 0, 0, 0.8); }
 	public Gdk.RGBA bar_bg_color { get; set; default = rgba(106, 106, 106, 0.8); }
+	public int monitor { get; set; default = -1; }
 	public bool focused_output { get; set; default = false; }
 
 	private Array<AvizoWindow> _windows = new Array<AvizoWindow>();
@@ -536,33 +559,48 @@ public class AvizoService : GLib.Object
 	public void show(double seconds) throws DBusError, IOError
 	{
 		var display = Gdk.Display.get_default();
-		// On Wayland, the compositor puts a single window on the focused output.
-		var on_focused_output = focused_output && is_wayland(display);
-		var monitors = on_focused_output ? 1 : display.get_n_monitors();
+		var monitors = display.get_n_monitors();
 
 		if (_windows.length < monitors)
 		{
 			_windows.set_size(monitors);
 		}
 
+		if (monitor >= monitors)
+		{
+			stderr.printf(@"Monitor: $(monitor) does not exist\n");
+			return;
+		}
+
+		// With no monitor chosen, focused_output shows the notification only on
+		// the focused output: one window that the compositor places (Wayland).
+		var on_focused_output = monitor < 0 && focused_output && is_wayland(display);
+		var target = on_focused_output ? 0 : monitor;
+
 		for (int i = 0; i < monitors; i++)
 		{
-			var window = _windows.index(i);
-			if (window == null)
+			if (target == -1 || target == i)
 			{
-				window = create_window(display);
-				_windows.insert_val(i, window);
+				var window = _windows.index(i);
+				if (window == null)
+				{
+					window = create_window(display);
+					_windows.insert_val(i, window);
+				}
+				show_window(window, on_focused_output ? null : display.get_monitor(i));
 			}
-			show_window(window, on_focused_output ? null : display.get_monitor(i));
 		}
 
 		// Hide what an earlier notification left on other outputs.
-		for (uint i = monitors; i < _windows.length; i++)
+		if (target != -1)
 		{
-			var window = _windows.index(i);
-			if (window != null && window.get_visible())
+			for (int i = 0; i < _windows.length; i++)
 			{
-				window.hide_animated();
+				var window = _windows.index(i);
+				if (i != target && window != null && window.get_visible())
+				{
+					window.hide_animated();
+				}
 			}
 		}
 
@@ -573,7 +611,8 @@ public class AvizoService : GLib.Object
 
 			if (_open_timeouts == 0)
 			{
-				for (uint i = 0; i < _windows.length; i++) {
+				for (int i = 0; i < _windows.length; i++)
+				{
 					var window = _windows.index(i);
 					if (window != null && window.get_visible())
 					{
@@ -598,16 +637,18 @@ public class AvizoService : GLib.Object
 
 		if (is_wayland(display))
 		{
-		  GtkLayerShell.init_for_window(window);
-		  GtkLayerShell.set_layer(window, GtkLayerShell.Layer.OVERLAY);
-		  GtkLayerShell.set_anchor(window, GtkLayerShell.Edge.TOP, true);
-		  GtkLayerShell.set_exclusive_zone(window, -1);
+			GtkLayerShell.init_for_window(window);
+			GtkLayerShell.set_layer(window, GtkLayerShell.Layer.OVERLAY);
+			GtkLayerShell.set_anchor(window, GtkLayerShell.Edge.TOP, true);
+			GtkLayerShell.set_anchor(window, GtkLayerShell.Edge.LEFT, true);
+			GtkLayerShell.set_namespace(window, "avizo");
+			GtkLayerShell.set_exclusive_zone(window, -1);
 #if HAVE_LATEST_GTK_LAYER_SHELL
-		  GtkLayerShell.set_keyboard_mode(window, GtkLayerShell.KeyboardMode.NONE);
+			GtkLayerShell.set_keyboard_mode(window, GtkLayerShell.KeyboardMode.NONE);
 #else
-		  GtkLayerShell.set_keyboard_interactivity(window, false);
+			GtkLayerShell.set_keyboard_interactivity(window, false);
 #endif
-    }
+		}
 
 		return window;
 	}
@@ -625,11 +666,12 @@ public class AvizoService : GLib.Object
 		}
 		else
 		{
-			var margin = (int) Math.lround((monitor.workarea.height - height) * y_offset);
-			int x, _y;
+			var margin_top = (int) Math.lround((monitor.workarea.height - height) * y_offset);
+			var margin_left = (int) Math.lround((monitor.workarea.width - width) * x_offset);
+			int x, y;
 			window.set_position(Gtk.WindowPosition.CENTER);
-			window.get_position(out x, out _y);
-			window.move(x, margin);
+			window.get_position(out x, out y);
+			window.move(margin_left, margin_top);
 			window.set_type_hint(Gdk.WindowTypeHint.NOTIFICATION);
 			window.set_accept_focus(false);
 			window.show_animated();
@@ -654,7 +696,7 @@ Gdk.RGBA rgba(int red, int green, int blue, double alpha)
 	return o;
 }
 
-void on_bus_aquired(DBusConnection conn)
+void on_bus_acquired(DBusConnection conn)
 {
 	try
 	{
@@ -671,7 +713,7 @@ public void main(string[] args)
 	Gtk.init(ref args);
 
 	Bus.own_name(BusType.SESSION, "org.danb.avizo.service", BusNameOwnerFlags.NONE,
-	             on_bus_aquired,
+	             on_bus_acquired,
 	             () => {},
 	             () =>
 	             {
