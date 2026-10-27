@@ -266,7 +266,6 @@ public class AvizoWindow : Gtk.Window
 			}
 			opacity += animation_sec_elapsed/fade_in;
 			if (opacity > 1) opacity = 1;
-			print("Fade in: %f\n", opacity);
 			widget.set_opacity(opacity);
 		}
 		else
@@ -280,7 +279,6 @@ public class AvizoWindow : Gtk.Window
 			}
 			opacity -= animation_sec_elapsed/fade_out;
 			if (opacity < 0) opacity = 0;
-			print("Fade out: %f\n", opacity);
 			widget.set_opacity(opacity);
 		}
 
@@ -532,7 +530,12 @@ public void main(string[] args)
 	Bus.own_name(BusType.SESSION, "org.danb.avizo.service", BusNameOwnerFlags.NONE,
 	             on_bus_aquired,
 	             () => {},
-	             () => stderr.printf("Could not acquire name\n"));
+	             () =>
+	             {
+	                 // Another instance owns the name (or the bus went away).
+	                 stderr.printf("Could not acquire name\n");
+	                 Process.exit(1);
+	             });
 
 	new AvizoService();
 
