@@ -81,6 +81,7 @@ public class AvizoWindow : Gtk.Window
 	}
 
 	public int padding { get; set; }
+	public double y_offset { get; set; }
 	public int border_radius { get; set; }
 	public new int border_width { get; set; }
 
@@ -100,6 +101,8 @@ public class AvizoWindow : Gtk.Window
 	private bool is_fade_in = true;
 	private int64 prev_frame_time = 0;
 	private uint prev_callback_id = 0;
+	private bool on_focused_output = false;
+	private uint place_timeout_id = 0;
 
 	[GtkChild]
 	private unowned Gtk.Image image;
@@ -223,6 +226,62 @@ public class AvizoWindow : Gtk.Window
 			box = Gdk.Rectangle() { x = left, y = top, width = right - left + 1, height = bottom - top + 1 };
 		}
 		return box;
+	}
+
+	// Shows the window on the given output (Wayland only).
+	public void show_on_monitor(Gdk.Monitor monitor)
+	{
+		on_focused_output = false;
+		GtkLayerShell.set_monitor(this, monitor);
+		place_on(monitor);
+		show_animated();
+	}
+
+	// Shows the window on the output the compositor picks for a surface that
+	// names none, i.e. the focused output (Wayland only).
+	public void show_on_focused_output()
+	{
+		// A shown surface stays on its output: show it afresh, so that it
+		// follows a focus change since the last time.
+		if (get_mapped())
+		{
+			hide();
+		}
+		on_focused_output = true;
+		// No output: the compositor picks the focused one.
+		Gdk.Monitor? no_monitor = null;
+		GtkLayerShell.set_monitor(this, no_monitor);
+		show_animated();
+
+		// The output is only known once the surface is on it, so the offset
+		// from its top can only be applied then.
+		if (place_timeout_id == 0)
+		{
+			place_timeout_id = Timeout.add(20, () =>
+			{
+				var window = get_window();
+				if (!on_focused_output || !get_visible() || window == null)
+				{
+					place_timeout_id = 0;
+					return Source.REMOVE;
+				}
+				var monitor = get_display().get_monitor_at_window(window);
+				if (monitor != null)
+				{
+					place_on(monitor);
+				}
+				return Source.CONTINUE;
+			});
+		}
+	}
+
+	private void place_on(Gdk.Monitor monitor)
+	{
+		var margin = (int) Math.lround((monitor.workarea.height - _height) * y_offset);
+		if (GtkLayerShell.get_margin(this, GtkLayerShell.Edge.TOP) != margin)
+		{
+			GtkLayerShell.set_margin(this, GtkLayerShell.Edge.TOP, margin);
+		}
 	}
 
 	public void show_animated()
@@ -384,7 +443,7 @@ public class AvizoService : GLib.Object
 	private static string[] props = {
 		"image_opacity", "progress", "width", "height", "padding",
 		"border_radius", "border_width", "block_height", "block_spacing", "block_count", "fade_in", "fade_out", "background", "border_color",
-		"bar_fg_color", "bar_bg_color",
+		"bar_fg_color", "bar_bg_color", "y_offset",
 	};
 
 	// Each notification shows the image that was set last: image_path or
@@ -445,6 +504,7 @@ public class AvizoService : GLib.Object
 	public Gdk.RGBA border_color { get; set; default = rgba(90, 90, 90, 0.8); }
 	public Gdk.RGBA bar_fg_color { get; set; default = rgba(0, 0, 0, 0.8); }
 	public Gdk.RGBA bar_bg_color { get; set; default = rgba(106, 106, 106, 0.8); }
+	public bool focused_output { get; set; default = false; }
 
 	private Array<AvizoWindow> _windows = new Array<AvizoWindow>();
 	private int _open_timeouts = 0;
@@ -476,7 +536,9 @@ public class AvizoService : GLib.Object
 	public void show(double seconds) throws DBusError, IOError
 	{
 		var display = Gdk.Display.get_default();
-		var monitors = display.get_n_monitors();
+		// On Wayland, the compositor puts a single window on the focused output.
+		var on_focused_output = focused_output && is_wayland(display);
+		var monitors = on_focused_output ? 1 : display.get_n_monitors();
 
 		if (_windows.length < monitors)
 		{
@@ -491,7 +553,17 @@ public class AvizoService : GLib.Object
 				window = create_window(display);
 				_windows.insert_val(i, window);
 			}
-			show_window(window, display.get_monitor(i));
+			show_window(window, on_focused_output ? null : display.get_monitor(i));
+		}
+
+		// Hide what an earlier notification left on other outputs.
+		for (uint i = monitors; i < _windows.length; i++)
+		{
+			var window = _windows.index(i);
+			if (window != null && window.get_visible())
+			{
+				window.hide_animated();
+			}
 		}
 
 		_open_timeouts++;
@@ -501,8 +573,12 @@ public class AvizoService : GLib.Object
 
 			if (_open_timeouts == 0)
 			{
-				for (int i = 0; i < monitors; i++) {
-					_windows.index(i).hide_animated();
+				for (uint i = 0; i < _windows.length; i++) {
+					var window = _windows.index(i);
+					if (window != null && window.get_visible())
+					{
+						window.hide_animated();
+					}
 				}
 			}
 
@@ -536,26 +612,29 @@ public class AvizoService : GLib.Object
 		return window;
 	}
 
-	private void show_window(AvizoWindow window, Gdk.Monitor monitor)
+	// Shows the window on the monitor, or on the focused output if it is null.
+	private void show_window(AvizoWindow window, Gdk.Monitor? monitor)
 	{
-		var margin = (int) Math.lround((monitor.workarea.height - height) * y_offset);
-
-		if (is_wayland(monitor.get_display()))
+		if (monitor == null)
 		{
-			GtkLayerShell.set_monitor(window, monitor);
-			GtkLayerShell.set_margin(window, GtkLayerShell.Edge.TOP, margin);
+			window.show_on_focused_output();
+		}
+		else if (is_wayland(monitor.get_display()))
+		{
+			window.show_on_monitor(monitor);
 		}
 		else
 		{
+			var margin = (int) Math.lround((monitor.workarea.height - height) * y_offset);
 			int x, _y;
 			window.set_position(Gtk.WindowPosition.CENTER);
 			window.get_position(out x, out _y);
 			window.move(x, margin);
 			window.set_type_hint(Gdk.WindowTypeHint.NOTIFICATION);
 			window.set_accept_focus(false);
+			window.show_animated();
 		}
 
-		window.show_animated();
 		window.queue_draw();
 	}
 }
