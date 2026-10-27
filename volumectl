@@ -16,6 +16,7 @@
 #   x | mute         Set mute.
 #   u | unmute       Unset mute.
 #   % | toggle-mute  Switch between mute and unmute.
+#   show             Show the current volume without changing it.
 #
 # Options (also accepted after the command):
 #   -b               Allow volume to go above 100% (boost).
@@ -159,6 +160,7 @@ case "$cmd" in
 	% | toggle-mute) 
     cmd_opt='toggle'
     cmd_type=$(set_property_cmd "$dev_type" "mute");;
+	show) ;;
 	*) die "invalid command: $cmd (see '$0 -h')";;
 esac
 
@@ -184,7 +186,9 @@ if $is_volume_cmd && $unmute; then
  pactl "set-$dev_type-mute" $dev_opt false
 fi
 
-pactl $cmd_type $dev_opt $cmd_opt
+if [ -n "$cmd_type" ]; then
+	pactl $cmd_type $dev_opt $cmd_opt
+fi
 
 muted=$(is_muted $dev_type)
 volume=$(get_volume $dev_type $dev_opt)
