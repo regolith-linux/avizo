@@ -13,6 +13,7 @@ interface AvizoService : GLib.Object
 	public abstract int border_width { owned get; set; }
 	public abstract int padding { owned get; set; }
 	public abstract double y_offset { owned get; set; }
+	public abstract double x_offset { owned get; set; }
 	public abstract int block_height { owned get; set; }
 	public abstract int block_spacing { owned get; set; }
 	public abstract int block_count { owned get; set; }
@@ -22,6 +23,7 @@ interface AvizoService : GLib.Object
 	public abstract Gdk.RGBA border_color { owned get; set; }
 	public abstract Gdk.RGBA bar_fg_color { owned get; set; }
 	public abstract Gdk.RGBA bar_bg_color { owned get; set; }
+	public abstract int monitor { owned get; set; }
 	public abstract bool focused_output { owned get; set; }
 
 	public abstract void show(double seconds) throws DBusError, IOError;
@@ -41,6 +43,7 @@ public class AvizoClient : GLib.Application
 	private static int _width = 248;
 	private static int _height = 232;
 	private static double _y_offset = 0.75;
+	private static double _x_offset = 0.50;
 	private static int _padding = 24;
 	private static int _border_radius = 16;
 	private static int _border_width = 1;
@@ -53,6 +56,7 @@ public class AvizoClient : GLib.Application
 	private static string _border_color = "";
 	private static string _bar_fg_color = "";
 	private static string _bar_bg_color = "";
+	private static int _monitor = -1;
 	private static bool _focused_output = false;
 
 	private static double _time = 5.0;
@@ -68,6 +72,7 @@ public class AvizoClient : GLib.Application
 		{ "width", 0, 0, OptionArg.INT, ref _width, "Sets the width of the notification", "INT" },
 		{ "height", 0, 0, OptionArg.INT, ref _height, "Sets the height of the notification", "INT" },
 		{ "y-offset", 0, 0, OptionArg.DOUBLE, ref _y_offset, "Sets relative offset of the notification to the top of the screen, allowed values range from 0 (top) to 1.0 (bottom)", "DOUBLE" },
+		{ "x-offset", 0, 0, OptionArg.DOUBLE, ref _x_offset, "Sets relative offset of the notification to the left of the screen, allowed values range from 0 (left) to 1.0 (right)", "DOUBLE" },
 		{ "padding", 0, 0, OptionArg.INT, ref _padding, "Sets the inner padding of the notification", "INT" },
 		{ "border-radius", 0, 0, OptionArg.INT, ref _border_radius, "Sets the border radius of the notification in px", "INT" },
 		{ "border-width", 0, 0, OptionArg.INT, ref _border_width, "Sets the border width of the notification in px", "INT" },
@@ -81,8 +86,9 @@ public class AvizoClient : GLib.Application
 		{ "foreground", 0, 0, OptionArg.STRING, ref _bar_fg_color, "Deprecated alias for --bar-fg-color", "STRING" },
 		{ "bar-fg-color", 0, 0, OptionArg.STRING, ref _bar_fg_color, "Sets the color of the filled bar blocks in format rgba([0, 255], [0, 255], [0, 255], [0, 1])", "STRING" },
 		{ "bar-bg-color", 0, 0, OptionArg.STRING, ref _bar_bg_color, "Sets the color of the unfilled bar blocks in format rgba([0, 255], [0, 255], [0, 255], [0, 1])", "STRING" },
-		{ "focused-output", 0, 0, OptionArg.NONE, ref _focused_output, "Show the notification only on the focused output (Wayland), instead of on every output", null },
 		{ "time", 0, 0, OptionArg.DOUBLE, ref _time, "Sets the time to show the notification, default is 5", "DOUBLE" },
+		{ "monitor", 0, 0, OptionArg.INT, ref _monitor, "Sets the monitor to show the notification on, default is all", "INT" },
+		{ "focused-output", 0, 0, OptionArg.NONE, ref _focused_output, "Without --monitor, show the notification only on the focused output (Wayland)", null },
 		{ null }
 	};
 
@@ -91,8 +97,9 @@ public class AvizoClient : GLib.Application
 		Object(application_id: "org.danb.avizo.client",
 		       flags: ApplicationFlags.HANDLES_COMMAND_LINE);
 
-		_service = Bus.get_proxy_sync(BusType.SESSION, "org.danb.avizo.service",
-		                                             "/org/danb/avizo/service");
+		_service = Bus.get_proxy_sync(BusType.SESSION,
+		                              "org.danb.avizo.service",
+		                              "/org/danb/avizo/service");
 	}
 
 	public override int command_line(ApplicationCommandLine command_line)
@@ -146,14 +153,23 @@ public class AvizoClient : GLib.Application
 		{
 			print("Available resources:\n");
 			print("  volume_muted\n");
+			print("  volume_muted_dark\n");
 			print("  volume_low\n");
+			print("  volume_low_dark\n");
 			print("  volume_medium\n");
+			print("  volume_medium_dark\n");
 			print("  volume_high\n");
+			print("  volume_high_dark\n");
 			print("  mic_muted\n");
+			print("  mic_muted_dark\n");
 			print("  mic_unmuted\n");
+			print("  mic_unmuted_dark\n");
 			print("  brightness_low\n");
+			print("  brightness_low_dark\n");
 			print("  brightness_medium\n");
+			print("  brightness_medium_dark\n");
 			print("  brightness_high\n");
+			print("  brightness_high_dark\n");
 
 			return 0;
 		}
@@ -173,6 +189,7 @@ public class AvizoClient : GLib.Application
 		_service.height = _height;
 		_service.padding = _padding;
 		_service.y_offset = _y_offset;
+		_service.x_offset = _x_offset;
 		_service.border_radius = _border_radius;
 		_service.border_width = _border_width;
 		_service.block_height = _block_height;
@@ -181,6 +198,7 @@ public class AvizoClient : GLib.Application
 
 		_service.fade_in = _fade_in;
 		_service.fade_out = _fade_out;
+		_service.monitor = _monitor;
 		_service.focused_output = _focused_output;
 
 		if (_background != "")
@@ -213,7 +231,18 @@ public class AvizoClient : GLib.Application
 			_service.bar_fg_color = parse_rgba(_bar_fg_color);
 		}
 
-		_service.show(_time);
+		try
+		{
+			_service.show(_time);
+		}
+		catch (GLib.DBusError e)
+		{
+			stderr.printf(@"avizo: $(e.message)\n");
+			stderr.printf("Failed to acquire bus, is avizo-service running?\n");
+
+			return 1;
+		}
+
 
 		return 0;
 	}
