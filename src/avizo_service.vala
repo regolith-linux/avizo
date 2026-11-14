@@ -51,6 +51,16 @@ public class AvizoWindow : Gtk.Window
 
 	public int monitor { get; set; }
 
+	public bool disable_progress { get; set; }
+
+	// An optional line of text (such as the name of the device), drawn under
+	// the image, above the progress indicator or in its place.
+	public string text { get; set; default = ""; }
+
+	public string font { get; set; default = "Sans Bold"; }
+
+	public int font_size { get; set; }
+
 	private int _width = 248;
 	public int width
 	{
@@ -122,6 +132,72 @@ public class AvizoWindow : Gtk.Window
 
 		draw.connect(on_draw);
 		notify["scale-factor"].connect(update_image);
+		notify.connect((object, pspec) =>
+		{
+			switch (pspec.name)
+			{
+				case "text":
+				case "font":
+				case "font-size":
+				case "disable-progress":
+				case "height":
+				case "padding":
+				case "border-width":
+				case "block-height":
+					update_image_space();
+					break;
+			}
+		});
+	}
+
+	// The text, laid out on one line that fits the notification's inner width,
+	// ellipsized at the end if it is too long; null if there is no text.
+	private Pango.Layout? create_text_layout()
+	{
+		if (text == null || text == "")
+		{
+			return null;
+		}
+
+		var layout = create_pango_layout(text);
+		var font_description = Pango.FontDescription.from_string(font);
+		if (font_size > 0)
+		{
+			font_description.set_absolute_size(font_size * Pango.SCALE);
+		}
+		layout.set_font_description(font_description);
+		layout.set_single_paragraph_mode(true);
+		layout.set_width(int.max(_width - 2 * padding - 2 * border_width, 1) * Pango.SCALE);
+		layout.set_ellipsize(Pango.EllipsizeMode.END);
+		layout.set_alignment(Pango.Alignment.CENTER);
+		return layout;
+	}
+
+	// The top of the text: right above the progress indicator, or where the
+	// progress indicator would be if it is disabled.
+	private double text_top(Pango.Layout layout)
+	{
+		int text_height;
+		layout.get_pixel_size(null, out text_height);
+
+		double bottom = _height - padding - border_width;
+		if (!disable_progress)
+		{
+			bottom -= block_height + padding / 2.0;
+		}
+		return bottom - text_height;
+	}
+
+	// Centers the image in the space above the text, or in the whole
+	// notification (as without text) if there is none.
+	private void update_image_space()
+	{
+		var layout = create_text_layout();
+		var margin = layout == null ? 0 : int.max((int) Math.ceil(_height - text_top(layout)), 0);
+		if (image.margin_bottom != margin)
+		{
+			image.margin_bottom = margin;
+		}
 	}
 
 	// Renders the image at the output's scale factor, so that it stays sharp on
@@ -386,7 +462,14 @@ public class AvizoWindow : Gtk.Window
 		Gdk.cairo_set_source_rgba(ctx, background);
 		draw_round_rect(ctx, border_width, border_width, _width - 2 * border_width, _height - 2 * border_width, int.max(border_radius - border_width, 0));
 
-		Gdk.cairo_set_source_rgba(ctx, bar_bg_color);
+		if (disable_progress)
+		{
+			Gdk.cairo_set_source_rgba(ctx, background);
+		}
+		else
+		{
+			Gdk.cairo_set_source_rgba(ctx, bar_bg_color);
+		}
 
 		for (int i = 0; i < block_count; i++)
 		{
@@ -396,29 +479,41 @@ public class AvizoWindow : Gtk.Window
 			               block_height);
 		}
 
-		Gdk.cairo_set_source_rgba(ctx, bar_fg_color);
+		if (!disable_progress)
+		{
+			Gdk.cairo_set_source_rgba(ctx, bar_fg_color);
 
-		if (block_spacing > 0)
-		{
-			for (int i = 0; i < (int) (block_count * progress); i++)
+			if (block_spacing > 0)
 			{
-				draw_rect(ctx, blocks_x + (block_width + block_spacing) * i,
-				               blocks_y,
-				               block_width,
-				               block_height);
+				for (int i = 0; i < (int) (block_count * progress); i++)
+				{
+					draw_rect(ctx, blocks_x + (block_width + block_spacing) * i,
+					               blocks_y,
+					               block_width,
+					               block_height);
+				}
 			}
-		}
-		else
-		{
-			var width = block_width * block_count * progress;
-			var height = block_height;
-			draw_rect(ctx, blocks_x,
-			               blocks_y,
-			               width,
-			               height);
+			else
+			{
+				var width = block_width * block_count * progress;
+				var height = block_height;
+				draw_rect(ctx, blocks_x,
+				               blocks_y,
+				               width,
+				               height);
+			}
 		}
 
 		ctx.set_operator(Cairo.Operator.OVER);
+
+		var layout = create_text_layout();
+		if (layout != null)
+		{
+			// Blend the glyph edges with the background (OVER, not SOURCE).
+			ctx.move_to(padding + border_width, text_top(layout));
+			Gdk.cairo_set_source_rgba(ctx, bar_fg_color);
+			Pango.cairo_show_layout(ctx, layout);
+		}
 
 		return false;
 	}
@@ -462,9 +557,9 @@ public class AvizoWindow : Gtk.Window
 public class AvizoService : GLib.Object
 {
 	private static string[] props = {
-		"image_opacity", "progress", "width", "height", "padding", "monitor",
+		"image_opacity", "progress", "disable_progress", "width", "height", "padding", "monitor",
 		"border_radius", "border_width", "block_height", "block_spacing", "block_count", "fade_in", "fade_out", "background", "border_color",
-		"bar_fg_color", "bar_bg_color", "x_offset", "y_offset",
+		"bar_fg_color", "bar_bg_color", "x_offset", "y_offset", "text", "font", "font_size",
 	};
 
 	// Each notification shows the image that was set last: image_path or
@@ -528,6 +623,10 @@ public class AvizoService : GLib.Object
 	public Gdk.RGBA bar_bg_color { get; set; default = rgba(106, 106, 106, 0.8); }
 	public int monitor { get; set; default = -1; }
 	public bool focused_output { get; set; default = false; }
+	public bool disable_progress { get; set; default = false; }
+	public string text { get; set; default = ""; }
+	public string font { get; set; default = "Sans Bold"; }
+	public int font_size { get; set; default = 16; }
 
 	private Array<AvizoWindow> _windows = new Array<AvizoWindow>();
 	// Counts the Show() calls: only the hide timer of the latest one hides the
