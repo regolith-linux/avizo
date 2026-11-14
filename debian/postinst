@@ -1,10 +1,13 @@
-#!/bin/bash
+#!/bin/sh
+set -e
 
-light_loc=$(whereis light)
-brightnessctl_loc=$(whereis brightnessctl)
-
-if [ ! -z ${light_loc+x} ]; then
-  chmod +s /usr/bin/light
+# lightctl runs light, which needs to be setuid to change the backlight.
+# Set the bits only when light is there and doesn't have them yet: without
+# light, there is nothing to do, and the configure must not fail.
+if [ "$1" = configure ] && [ -x /usr/bin/light ] && [ ! -u /usr/bin/light ]; then
+  chmod u+s,g+s /usr/bin/light
 fi
 
+#DEBHELPER#
 
+exit 0
