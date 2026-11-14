@@ -530,7 +530,13 @@ public class AvizoService : GLib.Object
 	public bool focused_output { get; set; default = false; }
 
 	private Array<AvizoWindow> _windows = new Array<AvizoWindow>();
-	private int _open_timeouts = 0;
+	// Counts the Show() calls: only the hide timer of the latest one hides the
+	// notification, so each call decides how long the notification stays.
+	private uint _show_serial = 0;
+
+	// The longest time a notification stays, in seconds: longer times would
+	// overflow the timer's milliseconds.
+	private const double MAX_SECONDS = 3600;
 
 	private void update_window_images()
 	{
@@ -604,12 +610,21 @@ public class AvizoService : GLib.Object
 			}
 		}
 
-		_open_timeouts++;
-		Timeout.add((int) (seconds * 1000), () =>
+		// D-Bus callers can send any double: NaN and negative times hide at
+		// once, and times beyond MAX_SECONDS are cut to it.
+		if (seconds.is_nan() || seconds < 0)
 		{
-			_open_timeouts--;
+			seconds = 0;
+		}
+		else if (seconds > MAX_SECONDS)
+		{
+			seconds = MAX_SECONDS;
+		}
 
-			if (_open_timeouts == 0)
+		var serial = ++_show_serial;
+		Timeout.add((uint) (seconds * 1000), () =>
+		{
+			if (serial == _show_serial)
 			{
 				for (int i = 0; i < _windows.length; i++)
 				{
