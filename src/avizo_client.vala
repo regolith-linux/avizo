@@ -306,8 +306,8 @@ Gdk.RGBA parse_rgba(string value)
 	return color;
 }
 
-public void main(string[] args)
+public int main(string[] args)
 {
 	AvizoClient client = new AvizoClient();
-	client.run(args);
+	return client.run(args);
 }
