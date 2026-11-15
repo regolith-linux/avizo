@@ -88,7 +88,7 @@ public class AvizoClient : GLib.Application
 		{ "bar-bg-color", 0, 0, OptionArg.STRING, ref _bar_bg_color, "Sets the color of the unfilled bar blocks in format rgba([0, 255], [0, 255], [0, 255], [0, 1])", "STRING" },
 		{ "time", 0, 0, OptionArg.DOUBLE, ref _time, "Sets the time to show the notification, default is 5", "DOUBLE" },
 		{ "monitor", 0, 0, OptionArg.INT, ref _monitor, "Sets the monitor to show the notification on, default is all", "INT" },
-		{ "focused-output", 0, 0, OptionArg.NONE, ref _focused_output, "Without --monitor, show the notification only on the focused output (Wayland)", null },
+		{ "focused-output", 0, 0, OptionArg.NONE, ref _focused_output, "Without --monitor, show the notification only on the focused output", null },
 		{ null }
 	};
 

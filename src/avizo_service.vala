@@ -107,17 +107,26 @@ public class AvizoWindow : Gtk.Window
 	private uint prev_callback_id = 0;
 	private bool on_focused_output = false;
 	private uint place_timeout_id = 0;
+	private bool has_alpha = false;
+
+	// Emitted once the window is hidden at the end of its fade-out.
+	public signal void faded_out();
 
 	[GtkChild]
 	private unowned Gtk.Image image;
 
 	public AvizoWindow()
 	{
+		// On X11 a popup window is left alone by the window manager: no frame,
+		// no focus, and it stays exactly where and how big it is put.
+		Object(type: is_wayland(Gdk.Display.get_default()) ? Gtk.WindowType.TOPLEVEL : Gtk.WindowType.POPUP);
+
 		var screen = get_screen();
 		var visual = screen.get_rgba_visual();
 		if (visual != null && screen.is_composited())
 		{
 			set_visual(visual);
+			has_alpha = true;
 		}
 
 		draw.connect(on_draw);
@@ -293,12 +302,60 @@ public class AvizoWindow : Gtk.Window
 		}
 	}
 
+	// Shows the window at the given position on the screen (X11 only).
+	public void show_at(int x, int y)
+	{
+		move(x, y);
+		update_shape();
+		show_animated();
+		raise_window();
+	}
+
+	// Puts the shown window above every other window (X11 only): no window
+	// manager keeps an unmanaged window on top.
+	public void raise_window()
+	{
+		var window = get_window();
+		if (window != null && get_mapped())
+		{
+			window.raise();
+		}
+	}
+
+	// Without a transparent visual (on X11 with no compositor) the corners
+	// outside the rounded outline cannot be drawn transparent: cut them off the
+	// window instead, so that whatever lies beneath shows through.
+	private void update_shape()
+	{
+		if (has_alpha)
+		{
+			return;
+		}
+
+		if (border_radius <= 0)
+		{
+			shape_combine_region(null);
+			return;
+		}
+
+		var mask = new Cairo.ImageSurface(Cairo.Format.A1, _width, _height);
+		var ctx = new Cairo.Context(mask);
+		ctx.set_antialias(Cairo.Antialias.NONE);
+		draw_round_rect(ctx, 0, 0, _width, _height, border_radius);
+		shape_combine_region(Gdk.cairo_region_create_from_surface(mask));
+	}
+
 	public void show_animated()
 	{
 		remove_tick_callback(prev_callback_id);
 		is_fade_in = true;
 		prev_callback_id = add_tick_callback(animation_tick);
 		show();
+
+		// The notification never takes pointer input, so that it passes to the
+		// window beneath it. Showing the window resets its input shape, so set
+		// it afresh every time.
+		get_window().input_shape_combine_region(new Cairo.Region(), 0, 0);
 	}
 
 	public void hide_animated()
@@ -349,6 +406,7 @@ public class AvizoWindow : Gtk.Window
 				hide();
 				prev_frame_time = 0;
 				frame_clock.end_updating();
+				faded_out();
 				return false;
 			}
 
@@ -538,6 +596,9 @@ public class AvizoService : GLib.Object
 	// overflow the timer's milliseconds.
 	private const double MAX_SECONDS = 3600;
 
+	// Whether the root window is watched to keep the notifications on top (X11).
+	private bool x11_stacking = false;
+
 	private void update_window_images()
 	{
 		for (uint i = 0; i < _windows.length; i++)
@@ -579,9 +640,18 @@ public class AvizoService : GLib.Object
 		}
 
 		// With no monitor chosen, focused_output shows the notification only on
-		// the focused output: one window that the compositor places (Wayland).
+		// the focused output: one window that the compositor places (Wayland),
+		// or the window of the monitor the user is working on (X11).
 		var on_focused_output = monitor < 0 && focused_output && is_wayland(display);
-		var target = on_focused_output ? 0 : monitor;
+		var target = monitor;
+		if (on_focused_output)
+		{
+			target = 0;
+		}
+		else if (monitor < 0 && focused_output)
+		{
+			target = x11_focused_monitor(display);
+		}
 
 		for (int i = 0; i < monitors; i++)
 		{
@@ -591,7 +661,7 @@ public class AvizoService : GLib.Object
 				if (window == null)
 				{
 					window = create_window(display);
-					_windows.insert_val(i, window);
+					set_window(i, window);
 				}
 				show_window(window, on_focused_output ? null : display.get_monitor(i));
 			}
@@ -664,8 +734,52 @@ public class AvizoService : GLib.Object
 			GtkLayerShell.set_keyboard_interactivity(window, false);
 #endif
 		}
+		else
+		{
+			// A faded-out notification leaves no window behind (X11): the next
+			// one gets a fresh window.
+			window.faded_out.connect(on_x11_window_faded_out);
+
+			if (!x11_stacking)
+			{
+				// Watch other windows being mapped and restacked, to keep the
+				// notification above them.
+				x11_stacking = true;
+				var root = display.get_default_screen().get_root_window();
+				root.set_events(root.get_events() | Gdk.EventMask.SUBSTRUCTURE_MASK);
+				root.add_filter(on_x11_root_event);
+			}
+		}
 
 		return window;
+	}
+
+	// Puts the window in the slot of the monitor, in place of the one there:
+	// inserting would move the windows of the following monitors along.
+	private void set_window(uint index, owned AvizoWindow? window)
+	{
+		_windows.remove_index(index);
+		_windows.insert_val(index, (owned) window);
+	}
+
+	private void on_x11_window_faded_out(AvizoWindow window)
+	{
+		for (uint i = 0; i < _windows.length; i++)
+		{
+			if (_windows.index(i) == window)
+			{
+				set_window(i, null);
+				break;
+			}
+		}
+
+		// The fade-out ends in the window's own frame callback: destroy it
+		// once that has returned.
+		Idle.add(() =>
+		{
+			window.destroy();
+			return Source.REMOVE;
+		});
 	}
 
 	// Shows the window on the monitor, or on the focused output if it is null.
@@ -681,19 +795,164 @@ public class AvizoService : GLib.Object
 		}
 		else
 		{
-			var margin_top = (int) Math.lround((monitor.workarea.height - height) * y_offset);
-			var margin_left = (int) Math.lround((monitor.workarea.width - width) * x_offset);
-			int x, y;
-			window.set_position(Gtk.WindowPosition.CENTER);
-			window.get_position(out x, out y);
-			window.move(margin_left, margin_top);
-			window.set_type_hint(Gdk.WindowTypeHint.NOTIFICATION);
-			window.set_accept_focus(false);
-			window.show_animated();
+			var workarea = x11_workarea(monitor);
+			window.show_at(workarea.x + (int) Math.lround((workarea.width - width) * x_offset),
+			               workarea.y + (int) Math.lround((workarea.height - height) * y_offset));
 		}
 
 		window.queue_draw();
 	}
+
+	private Gdk.FilterReturn on_x11_root_event(Gdk.XEvent xevent, Gdk.Event event)
+	{
+		X.Event* xev = (X.Event*) xevent;
+		X.Window changed;
+		switch (xev.type)
+		{
+			case X.EventType.MapNotify:
+				changed = xev.xmap.window;
+				break;
+			case X.EventType.ConfigureNotify:
+				changed = xev.xconfigure.window;
+				break;
+			case X.EventType.CirculateNotify:
+				changed = xev.xcirculate.window;
+				break;
+			default:
+				return Gdk.FilterReturn.CONTINUE;
+		}
+
+		// Raising a notification window reports it here too: only react to
+		// the windows of other programs.
+		var display = (Gdk.X11.Display) Gdk.Display.get_default();
+		if (Gdk.X11.Window.lookup_for_display(display, changed) == null)
+		{
+			for (int i = 0; i < _windows.length; i++)
+			{
+				var window = _windows.index(i);
+				if (window != null && window.get_visible())
+				{
+					window.raise_window();
+				}
+			}
+		}
+
+		return Gdk.FilterReturn.CONTINUE;
+	}
+}
+
+// The area of the monitor that panels and docks leave free (X11): the monitor
+// less what the work area of the current desktop, as announced by the window
+// manager, leaves out.
+Gdk.Rectangle x11_workarea(Gdk.Monitor monitor)
+{
+	var area = monitor.get_geometry();
+	var display = monitor.get_display();
+	var workareas = get_x11_root_property(display, "_NET_WORKAREA");
+	var desktop = get_x11_root_property(display, "_NET_CURRENT_DESKTOP");
+	var i = desktop.length > 0 ? desktop[0] * 4 : 0;
+	if (i >= 0 && i + 4 <= workareas.length)
+	{
+		// The property counts device pixels, the monitor geometry does not.
+		var scale = int.max(monitor.get_scale_factor(), 1);
+		var desktop_area = Gdk.Rectangle()
+		{
+			x = (int) workareas[i] / scale,
+			y = (int) workareas[i + 1] / scale,
+			width = (int) workareas[i + 2] / scale,
+			height = (int) workareas[i + 3] / scale
+		};
+		Gdk.Rectangle free_area;
+		if (area.intersect(desktop_area, out free_area))
+		{
+			area = free_area;
+		}
+	}
+	return area;
+}
+
+// The index of the monitor the user is working on (X11): the one holding the
+// middle of the active window, or with no active window the one under the
+// pointer.
+int x11_focused_monitor(Gdk.Display display)
+{
+	Gdk.Monitor? focused = null;
+	var active = get_x11_root_property(display, "_NET_ACTIVE_WINDOW");
+	if (active.length > 0 && active[0] != 0)
+	{
+		var x11_display = (Gdk.X11.Display) display;
+		unowned X.Display xdisplay = x11_display.get_xdisplay();
+		var window = (X.Window) active[0];
+		X.WindowAttributes attributes;
+		int x, y;
+		X.Window child;
+		x11_display.error_trap_push();
+		xdisplay.get_window_attributes(window, out attributes);
+		var translated = xdisplay.translate_coordinates(window, xdisplay.default_root_window(),
+			0, 0, out x, out y, out child);
+		if (x11_display.error_trap_pop() == 0 && translated)
+		{
+			var scale = int.max(display.get_monitor(0).get_scale_factor(), 1);
+			focused = display.get_monitor_at_point((x + attributes.width / 2) / scale,
+			                                       (y + attributes.height / 2) / scale);
+		}
+	}
+
+	if (focused == null)
+	{
+		int x, y;
+		display.get_default_seat().get_pointer().get_position(null, out x, out y);
+		focused = display.get_monitor_at_point(x, y);
+	}
+
+	for (int i = 0; i < display.get_n_monitors(); i++)
+	{
+		if (display.get_monitor(i) == focused)
+		{
+			return i;
+		}
+	}
+	return 0;
+}
+
+// The values of a 32-bit property of the X11 root window; none if it is not
+// set.
+long[] get_x11_root_property(Gdk.Display display, string name)
+{
+	long[] values = {};
+	if (!(display is Gdk.X11.Display))
+	{
+		return values;
+	}
+
+	var x11_display = (Gdk.X11.Display) display;
+	unowned X.Display xdisplay = x11_display.get_xdisplay();
+	var atom = Gdk.X11.get_xatom_by_name_for_display(x11_display, name);
+	X.Atom type;
+	int format;
+	ulong n_items, bytes_after;
+	void* data = null;
+
+	x11_display.error_trap_push();
+	var status = xdisplay.get_window_property(xdisplay.default_root_window(), atom, 0, 1024,
+		false, (X.Atom) X.ANY_PROPERTY_TYPE, out type, out format, out n_items, out bytes_after,
+		out data);
+	x11_display.error_trap_pop_ignored();
+
+	if (status == X.Success && data != null)
+	{
+		if (format == 32)
+		{
+			// Xlib hands 32-bit items over as longs.
+			long* items = (long*) data;
+			for (ulong i = 0; i < n_items; i++)
+			{
+				values += items[i];
+			}
+		}
+		X.free(data);
+	}
+	return values;
 }
 
 bool is_wayland(Gdk.Display? display)

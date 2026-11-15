@@ -6,6 +6,7 @@ Build-Depends:
  debhelper-compat (= 13),
  libglib2.0-dev,
  libgtk-3-dev (>= 3.22),
+ libx11-dev,
  libgtk-layer-shell0,
  gir1.2-gtklayershell-0.1,
  libgtk-layer-shell-dev,

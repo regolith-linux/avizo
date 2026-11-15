@@ -2,6 +2,8 @@ glib_dep = dependency('glib-2.0')
 gtk_dep = dependency('gtk+-3.0')
 gobject_dep = dependency('gobject-2.0')
 gobject_introspection_dep = dependency('gobject-introspection-1.0')
+gdk_x11_dep = dependency('gdk-x11-3.0')
+x11_dep = dependency('x11')
 
 config_data = configuration_data()
 config_data.set_quoted('VERSION', meson.project_version())
@@ -43,6 +45,8 @@ executable('avizo-service',
     gtk_dep,
     gobject_dep,
     gobject_introspection_dep,
+    gdk_x11_dep,
+    x11_dep,
     meson.get_compiler('c').find_library('gtk-layer-shell'),
     meson.get_compiler('c').find_library('m', required : false)
   ],
