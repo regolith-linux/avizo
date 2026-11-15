@@ -23,6 +23,9 @@
 #   -m               Control the source (mic) instead of sink (output).
 #   -M <monitornr>   Set monitor where notification will be shown
 #                      ('focused' for the focused one).
+#   -n               Name the device in the notification, unless it is a
+#                      built-in speaker (as GNOME does).
+#   -N               Always name the device in the notification.
 #   -u               Unmute when changing the volume (+|-|=).
 #   -d               Show dark theme friendly variant of the icon
 #   -h               Show this message and exit.
@@ -90,18 +93,61 @@ is_muted() {
   esac
 }
 
+# Prints the name of the default sink or source ($1) for the notification:
+# the description of its active port and its own description, e.g.
+# "Headphones – Built-in Audio Analog Stereo". If $2 is 'external', prints
+# nothing for a built-in speaker (form factor 'internal' on no port or a
+# speaker port), which is when gnome-settings-daemon shows no name either.
+device_label() {
+	default_name=$(pactl "get-default-$1")
+	# Untranslated field names; the values are as the server gives them.
+	LC_ALL=C.UTF-8 pactl list "${1}s" | awk -v name="$default_name" -v which="$2" '
+		{ line = $0; sub(/^[ \t]+/, "", line) }
+		/^[^ \t]/ { if (found) exit; next }
+		!found { if (line == "Name: " name) found = 1; next }
+		/^\t[^\t]/ { section = line }
+		line ~ /^Description: / { description = substr(line, 14); next }
+		line ~ /^Active Port: / { active = substr(line, 14); next }
+		section == "Properties:" && line ~ /^device\.form_factor = / {
+			form_factor = line
+			sub(/^[^"]*"/, "", form_factor)
+			sub(/"$/, "", form_factor)
+			next
+		}
+		section == "Ports:" && /^\t\t[^\t]/ {
+			i = index(line, ": ")
+			port_description = substr(line, i + 2)
+			sub(/ \([^()]*\)$/, "", port_description)
+			ports[substr(line, 1, i - 1)] = port_description
+		}
+		END {
+			if (!found) exit
+			if (which == "external" && form_factor == "internal" &&
+			    (active == "" || active == "[OUT] Speaker" || active == "[OUT] Handset" ||
+			     active == "analog-output-speaker" || active == "analog-output")) exit
+			label = description
+			if (active != "" && ports[active] != "" && ports[active] != description) {
+				label = ports[active] (description == "" ? "" : " – " description)
+			}
+			print label
+		}'
+}
+
 allow_boost=false
 dev_type='sink'
 unmute=false
 dark=0
 monitor=-1
+name_device=''
 optind=1
-while getopts ':bdp:mM:uh' OPT; do
+while getopts ':bdp:mM:nNuh' OPT; do
 	case "$OPT" in
 		b) allow_boost=true;;
 		d) dark=1;;
 		m) dev_type='source';;
 		M) monitor="$OPTARG";;
+		n) name_device='external';;
+		N) name_device='always';;
 		u) unmute=true;;
 		h) help; exit 0;;
 		\?) case "$OPTARG" in
@@ -126,6 +172,8 @@ while [ $n -gt 0 ]; do
 		-b) allow_boost=true;;
 		-d) dark=1;;
 		-m) dev_type='source';;
+		-n) name_device='external';;
+		-N) name_device='always';;
 		-u) unmute=true;;
 		-h) help; exit 0;;
 		-M)
@@ -247,5 +295,11 @@ if [ "$monitor" = focused ]; then
 	set -- --focused-output --monitor=-1
 else
 	set -- --monitor="$monitor"
+fi
+if [ -n "$name_device" ]; then
+	label=$(device_label "$dev_type" "$name_device" 2>/dev/null) || label=''
+	if [ -n "$label" ]; then
+		set -- "$@" --text="$label"
+	fi
 fi
 avizo-client --image-resource="$image" --progress="$progress" "$@"
