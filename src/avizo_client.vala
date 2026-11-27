@@ -29,6 +29,13 @@ interface AvizoService : GLib.Object
 	public abstract string text { owned get; set; }
 	public abstract string font { owned get; set; }
 	public abstract int font_size { owned get; set; }
+	public abstract bool muted { owned get; set; }
+	public abstract Gdk.RGBA bar_fg_muted_color { owned get; set; }
+	public abstract bool bar_fg_muted_color_set { owned get; set; }
+	public abstract double overamplified_max { owned get; set; }
+	public abstract Gdk.RGBA bar_fg_overamplified_color { owned get; set; }
+	public abstract bool use_icon_theme { owned get; set; }
+	public abstract string icon_theme { owned get; set; }
 
 	public abstract void show(double seconds) throws DBusError, IOError;
 }
@@ -66,6 +73,12 @@ public class AvizoClient : GLib.Application
 	private static string _text = "";
 	private static string _font = "Sans Bold";
 	private static int _font_size = 16;
+	private static bool _muted = false;
+	private static string _bar_fg_muted_color = "";
+	private static double _overamplified_max = 1.5;
+	private static string _bar_fg_overamplified_color = "rgba(224, 27, 36, 0.8)";
+	private static bool _use_icon_theme = false;
+	private static string _icon_theme = "";
 
 	private static double _time = 5.0;
 
@@ -76,7 +89,7 @@ public class AvizoClient : GLib.Application
 		{ "image-path", 0, 0, OptionArg.STRING, ref _image_path, "Use the image specified by the path", "PATH" },
 		{ "image-resource", 0, 0, OptionArg.STRING, ref _image_resource, "Use the image specified by the image resource id", "RESOURCE_ID" },
 		{ "image-opacity", 0, 0, OptionArg.DOUBLE, ref _image_opacity, "Sets the image opacity, allowed values range from 0 (transparent) to 1.0 (opaque)", "DOUBLE" },
-		{ "progress", 0, 0, OptionArg.DOUBLE, ref _progress, "Sets the progress in the notification, allowed values range from 0 to 1", "DOUBLE" },
+		{ "progress", 0, 0, OptionArg.DOUBLE, ref _progress, "Sets the progress in the notification, from 0 upward (1 is full; above 1, see --overamplified-max)", "DOUBLE" },
 		{ "width", 0, 0, OptionArg.INT, ref _width, "Sets the width of the notification", "INT" },
 		{ "height", 0, 0, OptionArg.INT, ref _height, "Sets the height of the notification", "INT" },
 		{ "y-offset", 0, 0, OptionArg.DOUBLE, ref _y_offset, "Sets relative offset of the notification to the top of the screen, allowed values range from 0 (top) to 1.0 (bottom)", "DOUBLE" },
@@ -101,6 +114,12 @@ public class AvizoClient : GLib.Application
 		{ "text", 0, 0, OptionArg.STRING, ref _text, "Shows a line of text (e.g. the device name) under the image, above the progress indicator or in its place; ellipsized if too long", "STRING" },
 		{ "font", 0, 0, OptionArg.STRING, ref _font, "Sets the font of the text as a Pango font description, default is \"Sans Bold\"", "STRING" },
 		{ "font-size", 0, 0, OptionArg.INT, ref _font_size, "Sets the size of the text in px, default is 16 (0 uses the size in --font)", "INT" },
+		{ "muted", 0, 0, OptionArg.NONE, ref _muted, "Shows this notification as one for a muted device (in --bar-fg-muted-color, if set)", null },
+		{ "bar-fg-muted-color", 0, 0, OptionArg.STRING, ref _bar_fg_muted_color, "Sets the color of the filled bar blocks for a muted device in format rgba([0, 255], [0, 255], [0, 255], [0, 1]), unset by default (--bar-fg-color is used)", "STRING" },
+		{ "overamplified-max", 0, 0, OptionArg.DOUBLE, ref _overamplified_max, "Sets the progress the whole bar stands for when the progress is above 1, default is 1.5 (values below 1 count as 1)", "DOUBLE" },
+		{ "bar-fg-overamplified-color", 0, 0, OptionArg.STRING, ref _bar_fg_overamplified_color, "Sets the color of the filled bar past the full mark in format rgba([0, 255], [0, 255], [0, 255], [0, 1]), default is rgba(224, 27, 36, 0.8)", "STRING" },
+		{ "use-icon-theme", 0, 0, OptionArg.NONE, ref _use_icon_theme, "Shows the pictures of the icon theme in the color of the bar instead of the built-in images", null },
+		{ "icon-theme", 0, 0, OptionArg.STRING, ref _icon_theme, "Sets the icon theme for --use-icon-theme, default is the desktop's", "STRING" },
 		{ null }
 	};
 
@@ -218,6 +237,18 @@ public class AvizoClient : GLib.Application
 		_service.font = _font;
 		_service.font_size = _font_size;
 
+		// These apply to this notification only, so they are always sent.
+		_service.muted = _muted;
+		_service.bar_fg_muted_color_set = _bar_fg_muted_color != "";
+		if (_bar_fg_muted_color != "")
+		{
+			_service.bar_fg_muted_color = parse_rgba(_bar_fg_muted_color);
+		}
+		_service.overamplified_max = _overamplified_max;
+		_service.bar_fg_overamplified_color = parse_rgba(_bar_fg_overamplified_color);
+		_service.use_icon_theme = _use_icon_theme;
+		_service.icon_theme = _icon_theme;
+
 		if (_background != "")
 		{
 			var color = parse_rgba(_background);
@@ -325,6 +356,12 @@ Gdk.RGBA parse_rgba(string value)
 
 public int main(string[] args)
 {
+	// Option values are converted from the locale's encoding, which GLib only
+	// knows once the locale is set: without this, a --text beyond plain ASCII
+	// (such as "Headphones – USB Headset" or a name in another alphabet) is
+	// rejected before any notification is shown.
+	Intl.setlocale(LocaleCategory.ALL, "");
+
 	AvizoClient client = new AvizoClient();
 	return client.run(args);
 }

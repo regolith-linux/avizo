@@ -6,8 +6,20 @@
 #   $0 [options] [=]<value>%
 #   $0 -h
 #
-# Adjust the sound or mic volume using 'pamixer' and show an on-screen
-# notification using 'avizo-client'.
+# Adjust the sound or mic volume and show an on-screen notification using
+# 'avizo-client'. The volume is controlled through one of these backends:
+#
+#   pactl    the PulseAudio control tool (also for PipeWire's pipewire-pulse)
+#   wpctl    the WirePlumber control tool (PipeWire)
+#   pamixer  the standalone mixer
+#
+# Unless one is chosen with -B or VOLUMECTL_BACKEND, the backends are tried
+# in the order pactl, wpctl, pamixer: the first one that is installed and
+# reaches a running sound server is used. A chosen backend is used or the
+# script fails; it never falls back to another one.
+#
+# The volume of a device is that of its loudest channel; with pamixer, it is
+# the average of the channels that pamixer reports.
 #
 # Commands:
 #   + | up           Increase the volume by <value> percents (defaults to 5).
@@ -19,8 +31,11 @@
 #   show             Show the current volume without changing it.
 #
 # Options (also accepted after the command):
+#   -B <backend>     Use this backend: pactl, wpctl or pamixer.
 #   -b               Allow volume to go above 100% (boost).
 #   -m               Control the source (mic) instead of sink (output).
+#   -p               Control a sink that is playing (with -m: a source that
+#                      is recording) instead of the default one, if any.
 #   -M <monitornr>   Set monitor where notification will be shown
 #                      ('focused' for the focused one).
 #   -n               Name the device in the notification, unless it is a
@@ -29,6 +44,9 @@
 #   -u               Unmute when changing the volume (+|-|=).
 #   -d               Show dark theme friendly variant of the icon
 #   -h               Show this message and exit.
+#
+# Environment:
+#   VOLUMECTL_BACKEND  The backend to use, as with -B (which takes precedence).
 #
 # This script is part of the avizo package.
 #---help---
@@ -40,6 +58,7 @@ if ( set -o pipefail 2>/dev/null ); then
 fi
 
 PROGNAME='volumectl'
+BACKENDS='pactl wpctl pamixer'
 
 help() {
 	local tag='---help---'
@@ -55,55 +74,96 @@ is_integer() {
 	expr "$1" : '[0-9]\+$' >/dev/null
 }
 
-playing_dev_id() {
-	if command -v pactl >/dev/null; then
-		pactl list short ${1}s | grep RUNNING | grep -m1 -o '^[0-9]\+'
-	else  # this works since pamixer 1.6
-		pamixer --list-${1}s | grep '"Running"' | grep -m1 -o '^[0-9]\+'
+# Each backend implements these functions, named <backend>_<function>. A
+# device (<dev>) is whatever the backend addresses it by, and $dev_type is
+# 'sink' or 'source'. Numbers are read and printed with a dot, whatever the
+# locale.
+#
+#   commands           Prints the programs the backend runs.
+#   reachable          Succeeds if the backend reaches a sound server.
+#   default            Prints the default device.
+#   playing            Prints a device that is playing (sink) or recording
+#                      (source), if there is one.
+#   volume <dev>       Prints the volume of the loudest channel, rounded to
+#                      a whole percent (pamixer: the average it reports).
+#   muted <dev>        Prints 1 if the device is muted, else 0.
+#   set_volume <dev> <percent> <current>
+#                      Changes the volume of the device from <current> to
+#                      <percent>; how the channels are balanced afterwards
+#                      is up to the backend.
+#   set_mute <dev> true|false|toggle
+#   describe <dev>     Prints four lines: the description of the device, the
+#                      name and the description of its active port, and its
+#                      form factor; an unknown value is an empty line.
+
+# --- pactl ---------------------------------------------------------------
+
+# Untranslated messages for parsing; values are printed as the server gives
+# them.
+pactl_c() {
+	LC_ALL=C.UTF-8 pactl "$@"
+}
+
+pactl_commands() {
+	echo pactl
+}
+
+pactl_reachable() {
+	pactl info >/dev/null 2>&1
+}
+
+pactl_default() {
+	pactl_c "get-default-$dev_type"
+}
+
+pactl_playing() {
+	pactl_c list short "${dev_type}s" | awk '
+		$NF == "RUNNING" && $2 !~ /\.monitor$/ && !found { print $2; found = 1 }'
+}
+
+# The raw volume of each channel is followed by its percentage, as in
+# "front-left: 32768 /  50% / -18.06 dB,".
+pactl_volume() {
+	pactl_c "get-$dev_type-volume" "$1" | awk '
+		{
+			for (i = 1; i + 2 <= NF; i++) {
+				if ($(i + 1) == "/" && $(i + 2) ~ /%$/ && $i ~ /^[0-9]+$/) {
+					if (!found || $i + 0 > max) max = $i + 0
+					found = 1
+				}
+			}
+		}
+		END { if (found) printf "%d\n", int(max * 100 / 65536 + 0.5) }'
+}
+
+pactl_muted() {
+	case "$(pactl_c "get-$dev_type-mute" "$1")" in
+		*yes*) echo 1;;
+		*) echo 0;;
+	esac
+}
+
+# A plain raise or lowering keeps the balance between the channels; a set, a
+# change stopped at 100% and a lowering to zero set every channel.
+pactl_set_volume() {
+	if [ "$cmd" = '+' ] && [ "$2" -eq $(($3 + value)) ]; then
+		pactl "set-$dev_type-volume" "$1" "+$value%"
+	elif [ "$cmd" = '-' ] && [ "$2" -gt 0 ] && [ "$2" -eq $(($3 - value)) ]; then
+		pactl "set-$dev_type-volume" "$1" "-$value%"
+	else
+		pactl "set-$dev_type-volume" "$1" "$2%"
 	fi
 }
 
-set_property_cmd() {
-  if [ $1 != "source" ] &&  [ $1 != "sink" ]; then
-    die "Unknown stream type: $1"
-  fi
-  echo "set-$1-$2"
+pactl_set_mute() {
+	pactl "set-$dev_type-mute" "$1" "$2"
 }
 
-get_property_val_cmd() {
-  if [ $1 != "source" ] && [ $1 != "sink" ]; then
-    die "Unknown stream type: $1"
-  fi
-  echo "get-$1-$2"
-}
-
-# Prints the volume of the sink or source ($1) named $2 in percents.
-get_volume() {
-  pactl $(get_property_val_cmd "$1" "volume") "$2" | head -n 1 | awk '{print substr($5, 1, length($5)-1)}'
-}
-
-# Prints 1 if the default sink or source ($1) is muted, else 0. No grep here:
-# the script runs with pipefail where the shell has it, and a grep that finds
-# nothing would end the script.
-is_muted() {
-  dev_type_upper=$(echo "$1" | tr '[:lower:]' '[:upper:]')
-  case "$(pactl "get-$1-mute" "@DEFAULT_${dev_type_upper}@")" in
-    *yes*) echo 1;;
-    *) echo 0;;
-  esac
-}
-
-# Prints the name of the default sink or source ($1) for the notification:
-# the description of its active port and its own description, e.g.
-# "Headphones – Built-in Audio Analog Stereo". If $2 is 'external', prints
-# nothing for a built-in speaker (form factor 'internal' on no port or a
-# speaker port), which is when gnome-settings-daemon shows no name either.
-device_label() {
-	default_name=$(pactl "get-default-$1")
-	# Untranslated field names; the values are as the server gives them.
-	LC_ALL=C.UTF-8 pactl list "${1}s" | awk -v name="$default_name" -v which="$2" '
+pactl_describe() {
+	pactl_c list "${dev_type}s" | awk -v name="$1" '
 		{ line = $0; sub(/^[ \t]+/, "", line) }
-		/^[^ \t]/ { if (found) exit; next }
+		/^[^ \t]/ { if (found) done = 1; next }
+		done { next }
 		!found { if (line == "Name: " name) found = 1; next }
 		/^\t[^\t]/ { section = line }
 		line ~ /^Description: / { description = substr(line, 14); next }
@@ -121,35 +181,311 @@ device_label() {
 			ports[substr(line, 1, i - 1)] = port_description
 		}
 		END {
-			if (!found) exit
-			if (which == "external" && form_factor == "internal" &&
-			    (active == "" || active == "[OUT] Speaker" || active == "[OUT] Handset" ||
-			     active == "analog-output-speaker" || active == "analog-output")) exit
-			label = description
-			if (active != "" && ports[active] != "" && ports[active] != description) {
-				label = ports[active] (description == "" ? "" : " – " description)
-			}
-			print label
+			if (!found) exit 1
+			print description
+			print active
+			print ports[active]
+			print form_factor
 		}'
 }
 
+# --- wpctl ---------------------------------------------------------------
+# wpctl addresses nodes by id. It tells neither the volume of each channel,
+# nor whether a node is running, nor the routes (ports) of a device: those
+# come from pw-cli.
+
+# pw-cli prints numbers in the format of the locale (e.g. "0,5"): read them
+# with a dot.
+pw_cli() {
+	LC_ALL=C.UTF-8 pw-cli "$@"
+}
+
+wpctl_commands() {
+	echo wpctl pw-cli
+}
+
+wpctl_reachable() {
+	wpctl status >/dev/null 2>&1
+}
+
+wpctl_default() {
+	local which
+	which=$(echo "$dev_type" | tr '[:lower:]' '[:upper:]')
+	wpctl inspect "@DEFAULT_AUDIO_$which@" | awk '
+		NR == 1 && $1 == "id" { sub(/,$/, "", $2); print $2 }'
+}
+
+wpctl_playing() {
+	local class id
+	case "$dev_type" in
+		sink) class='^Audio/Sink$';;
+		source) class='^Audio/Source(/Virtual)?$';;
+	esac
+	for id in $(pw_cli ls Node | awk -v class="$class" '
+		$1 == "id" { id = $2; sub(/,$/, "", id) }
+		$1 == "media.class" {
+			value = $0
+			sub(/^[^"]*"/, "", value)
+			sub(/"$/, "", value)
+			if (value ~ class) print id
+		}'); do
+		if pw_cli info "$id" | awk '
+			$(NF - 1) == "state:" && $NF == "\"running\"" { found = 1 }
+			END { exit !found }'; then
+			echo "$id"
+			return 0
+		fi
+	done
+}
+
+# The channel volumes of a node are linear; percentages are cubic.
+wpctl_volume() {
+	pw_cli enum-params "$1" Props | LC_ALL=C awk '
+		/Prop: key / { volumes = ($0 ~ /:Props:channelVolumes /) }
+		volumes && $1 == "Float" {
+			if (!found || $2 + 0 > max) max = $2 + 0
+			found = 1
+		}
+		END { if (found) printf "%d\n", int((max > 0 ? exp(log(max) / 3) : 0) * 100 + 0.5) }'
+}
+
+wpctl_muted() {
+	case "$(wpctl get-volume "$1")" in
+		*MUTED*) echo 1;;
+		*) echo 0;;
+	esac
+}
+
+wpctl_set_volume() {
+	wpctl set-volume "$1" "$2%"
+}
+
+wpctl_set_mute() {
+	case "$2" in
+		true) wpctl set-mute "$1" 1;;
+		false) wpctl set-mute "$1" 0;;
+		*) wpctl set-mute "$1" toggle;;
+	esac
+}
+
+# Prints the value of the property $2 in the output of 'wpctl inspect' ($1),
+# the last one given.
+wpctl_property() {
+	printf '%s\n' "$1" | awk -v key="$2" '
+		{ line = $0; sub(/^[ \t*]+/, "", line) }
+		index(line, key " = ") == 1 {
+			value = substr(line, length(key) + 4)
+			sub(/^"/, "", value)
+			sub(/"$/, "", value)
+			found = 1
+		}
+		END { if (found) print value }'
+}
+
+wpctl_describe() {
+	local info device card_device form_factor direction route
+	info=$(wpctl inspect "$1")
+	device=$(wpctl_property "$info" device.id)
+	card_device=$(wpctl_property "$info" card.profile.device)
+	form_factor=$(wpctl_property "$info" device.form-factor)
+	[ -n "$form_factor" ] || form_factor=$(wpctl_property "$info" device.form_factor)
+
+	route=''
+	if [ -n "$device" ]; then
+		if [ -z "$form_factor" ]; then
+			form_factor=$(wpctl_property "$(wpctl inspect "$device")" device.form-factor)
+		fi
+		case "$dev_type" in
+			sink) direction='Output';;
+			source) direction='Input';;
+		esac
+		# The name and the description of the device's active route for
+		# this node, one per line.
+		route=$(pw_cli enum-params "$device" Route | awk -v device="$card_device" -v direction="$direction" '
+			function flush() {
+				if (in_route && !done && dir == direction && (device == "" || dev == device)) {
+					print name
+					print description
+					done = 1
+				}
+			}
+			/Object: / && /Param:Route / {
+				flush()
+				in_route = 1
+				key = dir = dev = name = description = ""
+				next
+			}
+			/Prop: key / {
+				key = ""
+				if (match($0, /Param:Route:[a-z]+ /)) key = substr($0, RSTART + 12, RLENGTH - 13)
+				next
+			}
+			key == "direction" && $1 == "Id" {
+				dir = $0
+				sub(/.*Direction:/, "", dir)
+				sub(/\).*/, "", dir)
+				key = ""
+			}
+			key == "device" && $1 == "Int" { dev = $2; key = "" }
+			(key == "name" || key == "description") && $1 == "String" {
+				value = $0
+				sub(/^[^"]*"/, "", value)
+				sub(/"$/, "", value)
+				if (key == "name") name = value; else description = value
+				key = ""
+			}
+			END { flush() }')
+	fi
+
+	wpctl_property "$info" node.description
+	if [ -n "$route" ]; then
+		printf '%s\n' "$route"
+	else
+		printf '\n\n'
+	fi
+	printf '%s\n' "$form_factor"
+}
+
+# --- pamixer -------------------------------------------------------------
+# pamixer addresses devices by name. Its volume is the average of the
+# channels as pamixer reports it; it sets all of them alike, and it does not
+# name the default source, so sources get no name.
+
+pamixer_commands() {
+	echo pamixer
+}
+
+pamixer_reachable() {
+	pamixer --get-default-sink >/dev/null 2>&1
+}
+
+pamixer_default() {
+	case "$dev_type" in
+		sink) echo '@DEFAULT_SINK@';;
+		source) echo '@DEFAULT_SOURCE@';;
+	esac
+}
+
+# Lines like: 50 "spk" "Running" "Laptop Speaker"
+pamixer_playing() {
+	pamixer "--list-${dev_type}s" | awk -F'"' '
+		$4 == "Running" && $2 !~ /\.monitor$/ && !found { print $2; found = 1 }'
+}
+
+pamixer_volume() {
+	pamixer "--$dev_type=$1" --get-volume
+}
+
+pamixer_muted() {
+	case "$(pamixer "--$dev_type=$1" --get-mute)" in
+		true) echo 1;;
+		*) echo 0;;
+	esac
+}
+
+pamixer_set_volume() {
+	pamixer "--$dev_type=$1" --allow-boost --set-volume "$2"
+}
+
+pamixer_set_mute() {
+	case "$2" in
+		true) pamixer "--$dev_type=$1" --mute;;
+		false) pamixer "--$dev_type=$1" --unmute;;
+		*) pamixer "--$dev_type=$1" --toggle-mute;;
+	esac
+}
+
+pamixer_describe() {
+	local name
+	[ "$dev_type" = sink ] || return 1
+	case "$1" in
+		@DEFAULT_SINK@) name=$(pamixer --get-default-sink | awk -F'"' 'NR == 2 { print $2 }');;
+		*) name=$1;;
+	esac
+	[ -n "$name" ] || return 1
+	pamixer "--list-${dev_type}s" | awk -F'"' -v name="$name" '
+		NF >= 7 && $2 == name && !found {
+			description = $6
+			for (i = 7; i < NF; i++) description = description FS $i
+			found = 1
+		}
+		END {
+			if (!found) exit 1
+			print description
+			print ""
+			print ""
+			print ""
+		}'
+}
+
+# --- common --------------------------------------------------------------
+
+# Prints the first program of the backend ($1) that is not installed, or
+# fails if they all are.
+missing_command() {
+	local program
+	for program in $(${1}_commands); do
+		if ! command -v "$program" >/dev/null; then
+			echo "$program"
+			return 0
+		fi
+	done
+	return 1
+}
+
+# Prints the name of the device ($1) for the notification: the description
+# of its active port and its own description, e.g. "Headphones – Built-in
+# Audio Analog Stereo". If $name_device is 'external', prints nothing for a
+# built-in speaker (form factor 'internal' on no port or a speaker port),
+# which is when gnome-settings-daemon shows no name either.
+device_label() {
+	local info description port port_description form_factor label
+	info=$(${backend}_describe "$1" 2>/dev/null) || return 0
+	{
+		read -r description || true
+		read -r port || true
+		read -r port_description || true
+		read -r form_factor || true
+	} <<EOF
+$info
+EOF
+
+	if [ "$name_device" = external ] && [ "$form_factor" = internal ]; then
+		case "$port" in
+			'' | '[OUT] Speaker' | '[OUT] Handset' | analog-output-speaker | analog-output)
+				return 0;;
+		esac
+	fi
+	label=$description
+	if [ -n "$port" ] && [ -n "$port_description" ] && [ "$port_description" != "$description" ]; then
+		label="$port_description${description:+ – $description}"
+	fi
+	printf '%s\n' "$label"
+}
+
+backend=''
+backend_chosen=false
 allow_boost=false
 dev_type='sink'
+playing=false
 unmute=false
 dark=0
 monitor=-1
 name_device=''
 optind=1
-while getopts ':bdp:mM:nNuh' OPT; do
+while getopts ':B:bdmpM:nNuh' OPT; do
 	case "$OPT" in
+		B) backend="$OPTARG"; backend_chosen=true;;
 		b) allow_boost=true;;
 		d) dark=1;;
 		m) dev_type='source';;
+		p) playing=true;;
 		M) monitor="$OPTARG";;
 		n) name_device='external';;
 		N) name_device='always';;
 		u) unmute=true;;
 		h) help; exit 0;;
+		:) die "option requires an argument: -$OPTARG";;
 		\?) case "$OPTARG" in
 		    	[0-9]*) break;;
 		    	*) die "unknown option: -$OPTARG";;
@@ -172,15 +508,20 @@ while [ $n -gt 0 ]; do
 		-b) allow_boost=true;;
 		-d) dark=1;;
 		-m) dev_type='source';;
+		-p) playing=true;;
 		-n) name_device='external';;
 		-N) name_device='always';;
 		-u) unmute=true;;
 		-h) help; exit 0;;
-		-M)
-			[ $n -gt 0 ] || die "option requires an argument: -M"
-			monitor=$1
+		-B | -M)
+			[ $n -gt 0 ] || die "option requires an argument: $arg"
+			case "$arg" in
+				-B) backend=$1; backend_chosen=true;;
+				-M) monitor=$1;;
+			esac
 			shift
 			n=$((n - 1));;
+		-B?*) backend=${arg#-B}; backend_chosen=true;;
 		-M?*) monitor=${arg#-M};;
 		*) set -- "$@" "$arg";;
 	esac
@@ -203,66 +544,83 @@ fi
 
 # Note: 'raise' and 'lower' are only for backward compatibility with
 #  the previous version of this script.
-
-cmd_type=""
-is_volume_cmd=false
 case "$cmd" in
-	+ | up | raise) 
-    cmd_opt="+$value%"
-    is_volume_cmd=true
-    cmd_type=$(set_property_cmd "$dev_type" "volume");;
-	- | down | lower) 
-    cmd_opt="-$value%"
-    is_volume_cmd=true
-    cmd_type=$(set_property_cmd "$dev_type" "volume");;
-	= | set) 
-    cmd_opt="$value%"
-    is_volume_cmd=true
-    cmd_type=$(set_property_cmd "$dev_type" "volume");;
-	x | mute) 
-    cmd_opt='true' 
-    cmd_type=$(set_property_cmd "$dev_type" "mute");;
-	u | unmute) 
-    cmd_opt='false' 
-    cmd_type=$(set_property_cmd "$dev_type" "mute");;
-	% | toggle-mute) 
-    cmd_opt='toggle'
-    cmd_type=$(set_property_cmd "$dev_type" "mute");;
+	+ | up | raise) cmd='+';;
+	- | down | lower) cmd='-';;
+	= | set) cmd='=';;
+	x | mute) cmd='mute';;
+	u | unmute) cmd='unmute';;
+	% | toggle-mute) cmd='toggle-mute';;
 	show) ;;
 	*) die "invalid command: $cmd (see '$0 -h')";;
 esac
 
-dev_type_upper=$(echo $dev_type |tr '[:lower:]' '[:upper:]')
-dev_opt="@DEFAULT_$dev_type_upper@"
-
-# Without -b, raising or setting stops at 100%.
-if ! $allow_boost; then
-	case "$cmd" in
-		+ | up | raise)
-			current=$(get_volume "$dev_type" "$dev_opt")
-			if is_integer "$current" && [ $((current + value)) -gt 100 ]; then
-				cmd_opt='100%'
-			fi;;
-		= | set)
-			if [ "$value" -gt 100 ]; then
-				cmd_opt='100%'
-			fi;;
+# Choose the backend before anything changes.
+if ! $backend_chosen && [ -n "${VOLUMECTL_BACKEND:-}" ]; then
+	backend=$VOLUMECTL_BACKEND
+	backend_chosen=true
+fi
+if $backend_chosen; then
+	case "$backend" in
+		pactl | wpctl | pamixer) ;;
+		*) die "unknown backend: '$backend' (expected one of: $BACKENDS)";;
 	esac
+	if missing=$(missing_command "$backend"); then
+		die "command not found: $missing (needed by the $backend backend)"
+	fi
+	${backend}_reachable || die "$backend cannot reach a sound server"
+else
+	for candidate in $BACKENDS; do
+		if ! missing_command "$candidate" >/dev/null && ${candidate}_reachable; then
+			backend=$candidate
+			break
+		fi
+	done
+	[ -n "$backend" ] || die "no usable backend: none of $BACKENDS is installed and reaches a sound server"
 fi
 
-if $is_volume_cmd && $unmute; then
- pactl "set-$dev_type-mute" $dev_opt false
+dev=''
+if $playing; then
+	dev=$(${backend}_playing) || dev=''
+fi
+if [ -z "$dev" ]; then
+	dev=$(${backend}_default) || dev=''
+	[ -n "$dev" ] || die "$backend found no default $dev_type"
 fi
 
-if [ -n "$cmd_type" ]; then
-	pactl $cmd_type $dev_opt $cmd_opt
+current=$(${backend}_volume "$dev") || current=''
+if ! is_integer "$current"; then
+	die "$backend returned invalid volume level: '$current'"
 fi
 
-muted=$(is_muted $dev_type)
-volume=$(get_volume $dev_type $dev_opt)
+case "$cmd" in
+	+) target=$((current + value));;
+	-) target=$((current - value)); [ "$target" -ge 0 ] || target=0;;
+	=) target=$value;;
+	*) target='';;
+esac
+
+# Without -b, raising or setting stops at 100% (also from above it).
+if [ -n "$target" ] && [ "$cmd" != '-' ] && ! $allow_boost && [ "$target" -gt 100 ]; then
+	target=100
+fi
+
+if [ -n "$target" ] && $unmute; then
+	${backend}_set_mute "$dev" false
+fi
+
+case "$cmd" in
+	+ | - | =) ${backend}_set_volume "$dev" "$target" "$current";;
+	mute) ${backend}_set_mute "$dev" true;;
+	unmute) ${backend}_set_mute "$dev" false;;
+	toggle-mute) ${backend}_set_mute "$dev" toggle;;
+esac
+
+muted=$(${backend}_muted "$dev")
+volume=$(${backend}_volume "$dev") || volume=''
 
 if ! is_integer "$volume"; then
-	die "pactl returned invalid volume level: '$volume'"
+	die "$backend returned invalid volume level: '$volume'"
 fi
 
 case "$dev_type" in
@@ -290,14 +648,17 @@ if [ "$dark" -eq 1 ]; then
 	image="${image}_dark"
 fi
 
-progress=$(echo "$volume" | awk '{ printf "%.2f", ($1 > 100 ? 1 : $1 / 100) }')
+progress=$(echo "$volume" | LC_ALL=C awk '{ printf "%.2f", $1 / 100 }')
 if [ "$monitor" = focused ]; then
 	set -- --focused-output --monitor=-1
 else
 	set -- --monitor="$monitor"
 fi
+if [ "$muted" -gt "0" ]; then
+	set -- "$@" --muted
+fi
 if [ -n "$name_device" ]; then
-	label=$(device_label "$dev_type" "$name_device" 2>/dev/null) || label=''
+	label=$(device_label "$dev") || label=''
 	if [ -n "$label" ]; then
 		set -- "$@" --text="$label"
 	fi

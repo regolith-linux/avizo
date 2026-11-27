@@ -28,8 +28,11 @@ Adjust the sound or mic volume and show Avizo notification.
 
 * POSIX-sh compatible shell (e.g. Busybox ash, dash, ZSH, bash, …)
 * common \*nix userland (BSD, Busybox or GNU)
-* [pamixer](https://github.com/cdemoulins/pamixer)
-* [pactl](https://www.freedesktop.org/wiki/Software/PulseAudio/Documentation/User/CLI/#pactl) for the `-p` option (currently playing sink/source) if pamixer is older than 1.6
+* one of these sound backends, tried in this order unless one is chosen with
+  `-B <backend>` or the `VOLUMECTL_BACKEND` environment variable:
+  * [pactl](https://www.freedesktop.org/wiki/Software/PulseAudio/Documentation/User/CLI/#pactl) (`pactl`; PulseAudio, or PipeWire with pipewire-pulse)
+  * [WirePlumber](https://pipewire.pages.freedesktop.org/wireplumber/)'s `wpctl`, with PipeWire's `pw-cli` (`wpctl`)
+  * [pamixer](https://github.com/cdemoulins/pamixer) (`pamixer`; it shows the average of the channels rather than the loudest one, and names no source)
 
 ### lightctl
 

@@ -27,7 +27,7 @@ Replaces: avizo
 Depends:
  ${shlibs:Depends}, 
  ${misc:Depends},
- pulseaudio-utils,
+ pulseaudio-utils | wireplumber | pamixer,
  light,
  playerctl,
  librsvg2-common
